@@ -3,6 +3,7 @@ from flask_jwt_extended import JWTManager
 from flask_cors import CORS
 from database import mongo
 from config import Config
+import os
 
 # Import routes
 from routes.auth_routes import auth_bp
@@ -27,4 +28,5 @@ def hello():
     return jsonify({"message": "Hello, World!"})
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    port = int(os.environ.get("PORT", 5000))  
+    app.run(host="0.0.0.0", port=port, debug=True)
