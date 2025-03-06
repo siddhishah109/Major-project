@@ -1,4 +1,4 @@
-from flask import Flask
+from flask import Flask ,jsonify
 from flask_jwt_extended import JWTManager
 from flask_cors import CORS
 from database import mongo
@@ -20,6 +20,11 @@ CORS(app)
 app.register_blueprint(auth_bp)
 app.register_blueprint(fir_bp)
 app.register_blueprint(case_bp)
+
+
+@app.route("/", methods=["GET"])
+def hello():
+    return jsonify({"message": "Hello, World!"})
 
 if __name__ == "__main__":
     app.run(debug=True)
