@@ -4,27 +4,22 @@ from database import mongo
 
 case_bp = Blueprint("case", __name__)
 
-@case_bp.route("/case/update-status/<fir_id>", methods=["PUT"])
+@case_bp.route("/case/update-status/<int:fir_id>", methods=["PUT"])
 def update_case_status(fir_id):
     try:
         data = request.json
 
-        # Validate if ObjectId is correct
-        if not ObjectId.is_valid(fir_id):
-            return jsonify({"error": "Invalid FIR ID"}), 400
-
-        # Find the FIR
-        fir = mongo.db.firs.find_one({"_id": ObjectId(fir_id)})
+        # Find the FIR by numeric FIR ID
+        fir = mongo.db.firs.find_one({"fir_id": fir_id})
 
         if not fir:
             return jsonify({"error": "FIR not found"}), 404
 
         # Update FIR status
-        mongo.db.firs.update_one({"_id": ObjectId(fir_id)}, {"$set": {"status": data["status"]}})
+        mongo.db.firs.update_one({"fir_id": fir_id}, {"$set": {"status": data["status"]}})
 
         # Return updated FIR
-        updated_fir = mongo.db.firs.find_one({"_id": ObjectId(fir_id)})
-        updated_fir["_id"] = str(updated_fir["_id"])  # Convert ObjectId to string
+        updated_fir = mongo.db.firs.find_one({"fir_id": fir_id})
 
         return jsonify({"message": "Case status updated", "updated_fir": updated_fir}), 200
 

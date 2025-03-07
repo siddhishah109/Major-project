@@ -21,6 +21,7 @@ def register_fir():
         "aadhar": data["aadhar"],
         "contact": data["contact"],
         "description": data["description"],
+        "location": data["location"],
         "status": "Pending",
     }
     mongo.db.firs.insert_one(fir)
