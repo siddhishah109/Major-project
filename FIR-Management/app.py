@@ -9,6 +9,8 @@ import os
 
 app = Flask(__name__)
 app.config.from_object(Config)  
+app.config["JWT_VERIFY_SUB"] = False
+
 print(f"MongoDB URI: {app.config.get('MONGO_URI')}")
 
 
