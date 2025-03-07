@@ -1,27 +1,34 @@
-from flask import Flask ,jsonify
+from flask import Flask, jsonify
+from flask_pymongo import PyMongo 
 from flask_jwt_extended import JWTManager
 from flask_cors import CORS
-from database import mongo
-from config import Config
+from config import Config  
+
 import os
 
-# Import routes
+
+app = Flask(__name__)
+app.config.from_object(Config)  
+print(f"MongoDB URI: {app.config.get('MONGO_URI')}")
+
+
+mongo = PyMongo(app) 
+if mongo.db is None:
+    print("MongoDB connection failed!")
+else:
+    print("MongoDB connected successfully!")
+
+jwt = JWTManager(app)
+CORS(app)
+
 from routes.auth_routes import auth_bp
 from routes.fir_routes import fir_bp
 from routes.case_routes import case_bp
 
-app = Flask(__name__)
-app.config.from_object(Config)
 
-# Initialize extensions
-jwt = JWTManager(app)
-CORS(app)
-
-# Register Blueprints
 app.register_blueprint(auth_bp)
 app.register_blueprint(fir_bp)
 app.register_blueprint(case_bp)
-
 
 @app.route("/", methods=["GET"])
 def hello():
