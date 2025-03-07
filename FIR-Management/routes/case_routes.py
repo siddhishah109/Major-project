@@ -1,13 +1,10 @@
 from flask import Blueprint, request, jsonify
-from flask_jwt_extended import jwt_required
 from bson import ObjectId
 from database import mongo
-from flask_jwt_extended import jwt_required, get_jwt_identity
 
 case_bp = Blueprint("case", __name__)
 
 @case_bp.route("/case/update-status/<fir_id>", methods=["PUT"])
-@jwt_required()
 def update_case_status(fir_id):
     try:
         data = request.json
@@ -33,11 +30,8 @@ def update_case_status(fir_id):
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-    
 
-    
 @case_bp.route("/case/my-firs", methods=["POST"])
-@jwt_required()
 def get_user_firs():
     try:
         # Get Aadhar number from request body
@@ -56,5 +50,22 @@ def get_user_firs():
 
         return jsonify({"my_firs": user_firs}), 200
 
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+
+@case_bp.route("/case/stats", methods=["GET"])
+def get_case_stats():
+    try:
+        total_cases = mongo.db.firs.count_documents({})
+        completed_cases = mongo.db.firs.count_documents({"status": "Completed"})
+        pending_cases = mongo.db.firs.count_documents({"status": "Pending"})
+
+        return jsonify({
+            "total_cases": total_cases,
+            "completed_cases": completed_cases,
+            "pending_cases": pending_cases
+        }), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500

@@ -1,6 +1,5 @@
 from flask import Blueprint, request, jsonify
 from flask_bcrypt import Bcrypt
-from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
 from database import mongo
 
 auth_bp = Blueprint("auth", __name__)
@@ -9,13 +8,18 @@ bcrypt = Bcrypt()
 @auth_bp.route("/auth/register", methods=["POST"])
 def register():
     data = request.json
+    existing_user = mongo.db.users.find_one({"email": data["email"]})
+    
+    if existing_user:
+        return jsonify({"message": "User already registered, please log in"}), 400
+    
     hashed_password = bcrypt.generate_password_hash(data["password"]).decode("utf-8")
 
     user = {
         "name": data["name"],
         "email": data["email"],
         "password": hashed_password,
-        "role": data["role"],  # Citizen / Police / Admin
+        "role": data["role"], 
     }
 
     mongo.db.users.insert_one(user)
@@ -27,7 +31,6 @@ def login():
     user = mongo.db.users.find_one({"email": data["email"]})
 
     if user and bcrypt.check_password_hash(user["password"], data["password"]):
-        access_token = create_access_token(identity={"email": user["email"], "role": user["role"]})
-        return jsonify({"access_token": access_token}), 200
+        return jsonify({"message": "Login successful"}), 200
     else:
         return jsonify({"message": "Invalid credentials"}), 401
