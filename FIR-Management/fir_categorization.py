@@ -410,3 +410,552 @@ if __name__ == "__main__":
     # Optional: Show integration with the FIR system
     # integrate_with_fir_system()
 
+import pandas as pd
+import numpy as np
+import torch
+from torch.utils.data import Dataset, DataLoader
+import transformers
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, AdamW
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
+from sklearn.metrics import classification_report
+import os
+import json
+from datetime import datetime
+import h5py
+import gzip
+
+class FIRDataset(Dataset):
+    """Custom dataset for FIR classification"""
+    def __init__(self, texts, labels, tokenizer, max_length=512):
+        self.texts = texts
+        self.labels = labels
+        self.tokenizer = tokenizer
+        self.max_length = max_length
+
+    def __len__(self):
+        return len(self.texts)
+
+    def __getitem__(self, idx):
+        text = self.texts[idx]
+        label = self.labels[idx]
+
+        encoding = self.tokenizer(
+            text,
+            add_special_tokens=True,
+            max_length=self.max_length,
+            return_token_type_ids=False,
+            padding='max_length',
+            truncation=True,
+            return_attention_mask=True,
+            return_tensors='pt'
+        )
+
+        return {
+            'input_ids': encoding['input_ids'].flatten(),
+            'attention_mask': encoding['attention_mask'].flatten(),
+            'labels': torch.tensor(label, dtype=torch.long)
+        }
+
+def load_training_data():
+    """
+    Load FIR training data - in a real scenario, this would load from a database
+    For this example, we'll create synthetic data
+    """
+    # Create synthetic training data
+    categories = ['theft', 'assault', 'fraud', 'cyber', 'sexual', 'domestic']
+
+    # Example descriptions for each category
+    example_descriptions = {
+        'theft': [
+            "My wallet was stolen from my bag while shopping",
+            "Someone broke into my car and took my laptop",
+            "My bicycle was stolen from outside my house",
+            "Armed robbery at the convenience store",
+            "Home break-in, jewelry and electronics taken"
+        ],
+        'assault': [
+            "I was attacked by a stranger on the street",
+            "Physical altercation outside a bar",
+            "My neighbor punched me during an argument",
+            "I was threatened with a weapon",
+            "Fight at a sporting event resulted in injuries"
+        ],
+        'fraud': [
+            "Unauthorized transactions on my credit card",
+            "Someone used my identity to open new accounts",
+            "Received counterfeit currency as change",
+            "Investment scam that cost me my savings",
+            "Fake charity solicitation"
+        ],
+        'cyber': [
+            "My email was hacked and used to send spam",
+            "Ransomware attack on my computer",
+            "Online scam through a fake shopping website",
+            "Someone created a fake profile using my photos",
+            "Phishing attempt to steal my banking information"
+        ],
+        'sexual': [
+            "Inappropriate touching on public transport",
+            "Stalking and harassment of sexual nature",
+            "Received unsolicited explicit messages",
+            "Sexual harassment at workplace",
+            "Unwanted advances and threats"
+        ],
+        'domestic': [
+            "Argument with spouse turned violent",
+            "Child neglect by parent",
+            "Threats from family member",
+            "Verbal abuse and intimidation at home",
+            "Property damage during domestic dispute"
+        ]
+    }
+
+    # Expand each category with more examples by adding qualifiers
+    qualifiers = [
+        "serious incident of", "minor case of", "reported", "alleged",
+        "witnessed", "recurring", "first-time", "suspicious"
+    ]
+
+    data = []
+    for category, examples in example_descriptions.items():
+        for example in examples:
+            data.append((example, category))
+            # Add variations with qualifiers
+            for qualifier in qualifiers:
+                data.append((f"{qualifier} {example.lower()}", category))
+
+    # Convert to DataFrame
+    df = pd.DataFrame(data, columns=['description', 'category'])
+
+    # Add some random variations to make the dataset more realistic
+    df['description'] = df['description'].apply(
+        lambda x: x + " " + np.random.choice([
+            "on Monday", "yesterday", "last week",
+            "around midnight", "in the morning",
+            "", "", ""  # empty strings to keep some unchanged
+        ])
+    )
+
+    return df
+
+def quantize_model(model):
+    """Apply dynamic quantization to model to reduce size"""
+    # Only works for CPU inference
+    quantized_model = torch.quantization.quantize_dynamic(
+        model, {torch.nn.Linear}, dtype=torch.qint8
+    )
+    return quantized_model
+
+def save_compressed_model(model, label_mapping, output_path):
+    """Save model with compression enabled"""
+    with h5py.File(output_path, 'w') as h5_file:
+        # Save model configuration
+        config_group = h5_file.create_group('config')
+        config_str = model.config.to_json_string()
+        config_group.attrs['config_str'] = config_str
+        config_group.attrs['model_name'] = model.config.model_type
+
+        # Save model state dict with compression
+        weights_group = h5_file.create_group('weights')
+        state_dict = model.state_dict()
+
+        for key, value in state_dict.items():
+            weights_group.create_dataset(
+                key,
+                data=value.cpu().numpy(),
+                compression="gzip",
+                compression_opts=9  # Maximum compression
+            )
+
+        # Save label encoder mapping
+        label_group = h5_file.create_group('labels')
+        for idx, label in label_mapping.items():
+            label_group.attrs[str(idx)] = label
+
+    print(f"Model saved successfully to {output_path}")
+    print(f"File size: {os.path.getsize(output_path) / (1024 * 1024):.2f} MB")
+
+def train_and_save_compact_model(model_name='prajjwal1/bert-tiny', output_path='compact_fir_model.h5'):
+    """
+    Train a smaller BERT model and save it with compression
+    """
+    # Add the missing import
+    import json
+    import os
+
+    # Set device
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"Using device: {device}")
+
+    # Load training data
+    print("Loading training data...")
+    df = load_training_data()
+    print(f"Loaded {len(df)} training examples")
+
+    # Encode categories
+    label_encoder = LabelEncoder()
+    df['encoded_category'] = label_encoder.fit_transform(df['category'])
+
+    # Save label encoding mapping for later use
+    label_mapping = {i: label for i, label in enumerate(label_encoder.classes_)}
+    print("Category mapping:", label_mapping)
+
+    # Split data
+    train_df, val_df = train_test_split(df, test_size=0.2, random_state=42)
+    print(f"Training set: {len(train_df)}, Validation set: {len(val_df)}")
+
+    # Initialize tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+    # Prepare datasets
+    train_dataset = FIRDataset(
+        texts=train_df['description'].tolist(),
+        labels=train_df['encoded_category'].tolist(),
+        tokenizer=tokenizer,
+        max_length=128  # Reduced from 512 to further save memory
+    )
+
+    val_dataset = FIRDataset(
+        texts=val_df['description'].tolist(),
+        labels=val_df['encoded_category'].tolist(),
+        tokenizer=tokenizer,
+        max_length=128
+    )
+
+    # Create data loaders
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=16,  # Increased batch size for faster training with smaller model
+        shuffle=True
+    )
+
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=16,
+        shuffle=False
+    )
+
+    # Initialize model - using a much smaller model
+    model = AutoModelForSequenceClassification.from_pretrained(
+        model_name,
+        num_labels=len(label_mapping)
+    )
+    model = model.to(device)
+
+    # Define optimizer and loss
+    optimizer = AdamW(model.parameters(), lr=5e-5)  # Slightly higher learning rate
+
+    # Training loop
+    epochs = 4  # One extra epoch to compensate for smaller model
+    best_accuracy = 0
+    best_model_path = 'best_model_state.pt'
+
+    for epoch in range(epochs):
+        print(f"\nEpoch {epoch+1}/{epochs}")
+
+        # Training phase
+        model.train()
+        train_loss = 0
+        train_steps = 0
+
+        for batch in train_loader:
+            # Move batch to device
+            input_ids = batch['input_ids'].to(device)
+            attention_mask = batch['attention_mask'].to(device)
+            labels = batch['labels'].to(device)
+
+            # Forward pass
+            outputs = model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                labels=labels
+            )
+
+            loss = outputs.loss
+            train_loss += loss.item()
+            train_steps += 1
+
+            # Backward pass
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            # Print progress every 20 steps
+            if train_steps % 20 == 0:
+                print(f"  Step {train_steps}, Loss: {loss.item():.4f}")
+
+        avg_train_loss = train_loss / len(train_loader)
+        print(f"Average training loss: {avg_train_loss:.4f}")
+
+        # Evaluation phase
+        model.eval()
+        val_loss = 0
+        predictions = []
+        true_labels = []
+
+        with torch.no_grad():
+            for batch in val_loader:
+                input_ids = batch['input_ids'].to(device)
+                attention_mask = batch['attention_mask'].to(device)
+                labels = batch['labels'].to(device)
+
+                outputs = model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    labels=labels
+                )
+
+                loss = outputs.loss
+                val_loss += loss.item()
+
+                # Get predictions
+                preds = torch.argmax(outputs.logits, dim=1)
+                predictions.extend(preds.cpu().tolist())
+                true_labels.extend(labels.cpu().tolist())
+
+        avg_val_loss = val_loss / len(val_loader)
+        accuracy = sum(1 for x, y in zip(predictions, true_labels) if x == y) / len(predictions)
+
+        print(f"Validation loss: {avg_val_loss:.4f}")
+        print(f"Validation accuracy: {accuracy:.4f}")
+
+        # Save best model
+        if accuracy > best_accuracy:
+            best_accuracy = accuracy
+
+            # Save model state dict
+            torch.save(model.state_dict(), best_model_path)
+            print(f"Saved best model state with accuracy: {accuracy:.4f}")
+
+    # Load best model
+    model.load_state_dict(torch.load(best_model_path))
+
+    # Save the model and tokenizer to separate directories instead of h5 file
+    model_dir = os.path.splitext(output_path)[0]  # Remove .h5 extension
+    os.makedirs(model_dir, exist_ok=True)
+
+    # Save model
+    print(f"Saving model to {model_dir}...")
+    model.save_pretrained(model_dir)
+
+    # Save tokenizer
+    tokenizer_dir = os.path.join(model_dir, 'tokenizer')
+    tokenizer.save_pretrained(tokenizer_dir)
+
+    # Save label mapping as JSON
+    mapping_path = os.path.join(model_dir, 'label_mapping.json')
+    with open(mapping_path, 'w') as f:
+        json.dump(label_mapping, f)
+
+    # Clean up temporary model file
+    if os.path.exists(best_model_path):
+        os.remove(best_model_path)
+
+    # Evaluate the final model
+    model.eval()
+    all_predictions = []
+    all_labels = []
+
+    with torch.no_grad():
+        for batch in val_loader:
+            input_ids = batch['input_ids'].to(device)
+            attention_mask = batch['attention_mask'].to(device)
+            labels = batch['labels']
+
+            outputs = model(
+                input_ids=input_ids,
+                attention_mask=attention_mask
+            )
+
+            preds = torch.argmax(outputs.logits, dim=1)
+            all_predictions.extend(preds.cpu().tolist())
+            all_labels.extend(labels.tolist())
+
+    # Convert numerical predictions back to category names
+    prediction_labels = [label_mapping[pred] for pred in all_predictions]
+    true_labels = [label_mapping[label] for label in all_labels]
+
+    # Print classification report
+    print("\nClassification Report:")
+    print(classification_report(true_labels, prediction_labels))
+
+    return model_dir, tokenizer, label_mapping
+
+def load_compact_model(model_path, model_name='prajjwal1/bert-tiny'):
+    """
+    Load the model from directory structure
+    """
+    import json
+    import os
+    import torch
+    from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    # Check if model_path is a file (old h5 format) or directory (new format)
+    if os.path.isfile(model_path):
+        # If it's still an h5 file, we need to get the directory name without extension
+        model_dir = os.path.splitext(model_path)[0]
+    else:
+        # If it's already a directory, use it as is
+        model_dir = model_path
+
+    # Load the model
+    model = AutoModelForSequenceClassification.from_pretrained(model_dir)
+    model = model.to(device)
+
+    # Load the tokenizer
+    tokenizer_dir = os.path.join(model_dir, 'tokenizer')
+    if os.path.exists(tokenizer_dir):
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_dir)
+    else:
+        # Fallback to the original model's tokenizer if not found
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+    # Load the label mapping
+    mapping_path = os.path.join(model_dir, 'label_mapping.json')
+    with open(mapping_path, 'r') as f:
+        label_mapping = json.load(f)
+
+    # Convert keys to integers since JSON converts them to strings
+    label_mapping = {int(k): v for k, v in label_mapping.items()}
+
+    return model, tokenizer, label_mapping
+
+def predict_fir_category(text, model, tokenizer, label_mapping):
+    """
+    Predict category for a new FIR description
+    """
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    # Tokenize input text
+    encoding = tokenizer(
+        text,
+        add_special_tokens=True,
+        max_length=128,
+        return_token_type_ids=False,
+        padding='max_length',
+        truncation=True,
+        return_attention_mask=True,
+        return_tensors='pt'
+    )
+
+    # Move to device
+    input_ids = encoding['input_ids'].to(device)
+    attention_mask = encoding['attention_mask'].to(device)
+
+    # Set model to evaluation mode
+    model.eval()
+
+    # Get prediction
+    with torch.no_grad():
+        outputs = model(
+            input_ids=input_ids,
+            attention_mask=attention_mask
+        )
+
+        logits = outputs.logits
+        predicted_class_id = torch.argmax(logits, dim=1).item()
+        predicted_label = label_mapping[predicted_class_id]
+
+        # Get confidence scores for all classes
+        probabilities = torch.softmax(logits, dim=1).squeeze().cpu().numpy()
+        confidence_scores = {label_mapping[i]: float(probabilities[i]) for i in range(len(label_mapping))}
+
+    return {
+        'category': predicted_label,
+        'confidence': confidence_scores[predicted_label],
+        'all_scores': confidence_scores
+    }
+
+def integrate_with_fir_system():
+    """
+    Show how to integrate the trained model with the existing FIR system
+    """
+    # Train and save the compact model
+    model_path, tokenizer, label_mapping = train_and_save_compact_model()
+
+    # For demonstration, we'll create a simple API-like function
+    def classify_fir(description):
+        # Load model
+        model, tokenizer, label_mapping = load_compact_model(model_path)
+
+        # Make prediction
+        result = predict_fir_category(description, model, tokenizer, label_mapping)
+
+        # In a real system, you might integrate with a case management system
+        # and add additional processing here
+        case_id = f"CASE-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+
+        return {
+            'case_id': case_id,
+            'description': description,
+            'assigned_category': result['category'],
+            'confidence': f"{result['confidence']*100:.2f}%",
+            'processing_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            'priority': 'High' if result['confidence'] > 0.8 else 'Medium'
+        }
+
+    # Test the system with sample cases
+    test_descriptions = [
+        "Someone stole my wallet at the mall with a gun",
+        "Domestic dispute with physical altercation",
+        "Online banking fraud detected in my account",
+        "Minor scuffle between neighbors, no serious injuries"
+    ]
+
+    for desc in test_descriptions:
+        print("\nDescription:", desc)
+        result = classify_fir(desc)
+        print("Case Details:")
+        for key, value in result.items():
+            print(f"{key.replace('_', ' ').title()}: {value}")
+
+def check_model_size(file_path):
+    """
+    Check and print the size of the model file
+    """
+    if os.path.exists(file_path):
+        size_mb = os.path.getsize(file_path) / (1024 * 1024)
+        print(f"Model file size: {size_mb:.2f} MB")
+        if size_mb > 100:
+            print("WARNING: Model still exceeds 100MB limit!")
+        else:
+            print(f"SUCCESS: Model is under the 100MB limit ({size_mb:.2f} MB)")
+    else:
+        print(f"File {file_path} not found")
+
+if __name__ == "__main__":
+    # Train and save the compact model
+    output_path = 'compact_fir_model.h5'
+    model_path, tokenizer, label_mapping = train_and_save_compact_model(
+        model_name='prajjwal1/bert-tiny',  # Much smaller than bert-base-uncased
+        output_path=output_path
+    )
+
+    # Check the model size
+    check_model_size(output_path)
+
+    # Test some example predictions
+    print("\nTesting model predictions...")
+    model, tokenizer, label_mapping = load_compact_model(output_path)
+
+    test_texts = [
+        "My phone was stolen from my pocket on the bus this morning",
+        "My neighbor threatened me with physical violence during an argument",
+        "Someone accessed my bank account and made fraudulent purchases",
+        "I received harassing messages of a sexual nature from an unknown person"
+    ]
+
+    for text in test_texts:
+        result = predict_fir_category(text, model, tokenizer, label_mapping)
+        print(f"\nText: {text}")
+        print(f"Predicted Category: {result['category']} (Confidence: {result['confidence']*100:.2f}%)")
+        print("All category scores:")
+        for category, score in sorted(result['all_scores'].items(), key=lambda x: x[1], reverse=True):
+            print(f"  {category}: {score*100:.2f}%")
+
+    # Optionally demonstrate integration
+    # integrate_with_fir_system()
+

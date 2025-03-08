@@ -1,4 +1,3 @@
 .env
 _pycache_
 __pycache__
-fir_classification_model.h5
