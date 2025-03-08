@@ -4,4 +4,8 @@ flask-jwt-extended
 flask-bcrypt
 flask-cors
 python-dotenv
-jsonify
+pymongo 
+tensorflow 
+numpy
+transformers
+h5py
