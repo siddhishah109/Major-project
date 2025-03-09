@@ -25,6 +25,32 @@ def update_case_status(fir_id):
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    
+
+@case_bp.route("/case/add-update/<int:fir_id>", methods=["PUT"])
+def add_case_update(fir_id):
+    try:
+        data = request.json
+        new_update = data.get("update")
+
+        if not new_update:
+            return jsonify({"error": "Update field is required"}), 400
+        fir = mongo.db.firs.find_one({"fir_id": fir_id})
+
+        if not fir:
+            return jsonify({"error": "FIR not found"}), 404
+
+        mongo.db.firs.update_one(
+            {"fir_id": fir_id},
+            {"$push": {"updates": new_update}}
+        )
+        updated_fir = mongo.db.firs.find_one({"fir_id": fir_id})
+
+        return jsonify({"message": "Case update added", "updated_fir": updated_fir}), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 @case_bp.route("/case/my-firs", methods=["POST"])
 def get_user_firs():

@@ -49,6 +49,7 @@ def register_fir():
         "aadhar_number": data.get("aadhar_number"),
         "status": "Pending",
         "predicted_category": predicted_category,  
+        "updates" :""
     }
     
     mongo.db.firs.insert_one(fir)
