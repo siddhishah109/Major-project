@@ -1,8 +1,121 @@
-from flask import Blueprint, request, jsonify
 from bson import ObjectId
+from flask import Blueprint, Response, request, jsonify,send_file
+from werkzeug.utils import secure_filename
+from gridfs import GridFS
+import os
+import io
 from database import mongo
 
 case_bp = Blueprint("case", __name__)
+
+fs = GridFS(mongo.db)
+
+@case_bp.route("/case/update/<int:fir_id>", methods=["PUT"])
+def update_case(fir_id):
+    try:
+        update_fields = {}
+
+        # Handle form-data (for files) or JSON input
+        data = request.form if request.content_type.startswith('multipart/form-data') else request.json or {}
+        if "status" in data:
+            update_fields["status"] = data["status"]
+
+        if "update" in data:
+            update_fields.setdefault("updates", []).append(data["update"])
+
+        # Handle file uploads
+        uploaded_files = request.files.getlist("files")
+        file_ids = []
+        for file in uploaded_files:
+            if file and file.filename:
+                filename = secure_filename(file.filename)
+                file_id = fs.put(file, filename=filename)  # Store file in GridFS
+                file_ids.append(str(file_id))  # Convert ObjectId to string
+
+        if file_ids:
+            update_fields.setdefault("files", []).extend(file_ids)
+
+        # If no valid data is provided, return an error
+        if not update_fields:
+            return jsonify({"error": "At least one field (status, update, or file) is required"}), 400
+
+        # Find the FIR document
+        fir = mongo.db.firs.find_one({"fir_id": fir_id})
+        if not fir:
+            return jsonify({"error": "FIR not found"}), 404
+
+        # Prepare MongoDB update query
+        update_query = {"$set": {}, "$push": {}}
+        if "status" in update_fields:
+            update_query["$set"]["status"] = update_fields["status"]
+        if "updates" in update_fields:
+            update_query["$push"]["updates"] = {"$each": update_fields["updates"]}
+        if "files" in update_fields:
+            update_query["$push"]["files"] = {"$each": update_fields["files"]}
+
+        # Remove empty update fields
+        update_query = {k: v for k, v in update_query.items() if v}
+
+        # Perform update
+        mongo.db.firs.update_one({"fir_id": fir_id}, update_query)
+
+        # Retrieve updated FIR
+        updated_fir = mongo.db.firs.find_one({"fir_id": fir_id})
+
+        return jsonify({
+            "message": "Case updated successfully",
+            "updated_fir": {
+                "fir_id": fir_id,
+                "status": updated_fir.get("status"),
+                "updates": updated_fir.get("updates", []),
+                "files": updated_fir.get("files", [])  
+            }
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+
+@case_bp.route("/case/download/<file_id>", methods=["GET"])
+def download_file(file_id):
+    try:
+        # Convert file_id to ObjectId
+        file_id = ObjectId(file_id)
+
+        # Retrieve file from GridFS
+        file_data = fs.get(file_id)
+        if not file_data:
+            return jsonify({"error": "File not found"}), 404
+
+        # Return the file as a response
+        return send_file(
+            io.BytesIO(file_data.read()),
+            mimetype=file_data.content_type,
+            as_attachment=True,
+            download_name=file_data.filename
+        )
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@case_bp.route("/files/<file_id>", methods=["GET"])
+def view_file(file_id):
+    try:
+        file = fs.get(ObjectId(file_id))
+        if not file:
+            return jsonify({"error": "File not found"}), 404
+
+        content_type = file.content_type or "application/octet-stream"
+
+       
+        response = Response(io.BytesIO(file.read()), content_type=content_type)
+        response.headers["Content-Disposition"] = f'inline; filename="{file.filename}"'
+
+        return response
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @case_bp.route("/case/update-status/<int:fir_id>", methods=["PUT"])
 def update_case_status(fir_id):

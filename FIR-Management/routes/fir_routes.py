@@ -26,38 +26,62 @@ def categorize_fir(description):
         if any(keyword in description.lower() for keyword in keywords):
             return category
     return "Unknown"
+from flask import request, jsonify
+from werkzeug.utils import secure_filename
+import gridfs
+import io
+
+fs = gridfs.GridFS(mongo.db)  # Initialize GridFS
 
 @fir_bp.route("/fir/register", methods=["POST"])
 def register_fir():
-    data = request.json
-    description = data.get("description", "")
-    predicted_category = categorize_fir(description)
-    
-    fir = {
-        "fir_id": get_next_fir_id(),
-        "complainant_name": data.get("complainant_name"),
-        "father_husband_name": data.get("father_husband_name"),
-        "address": data.get("address"),
-        "phone_number": data.get("phone_number"),
-        "email": data.get("email"),
-        "city": data.get("city"),
-        "district": data.get("district"),
-        "state": data.get("state"),
-        "nature_of_offense": data.get("nature_of_offense"),
-        "description": description,
-        "details_of_witnesses": data.get("details_of_witnesses"),
-        "aadhar_number": data.get("aadhar_number"),
-        "status": "Pending",
-        "predicted_category": predicted_category,  
-        "updates" :""
-    }
-    
-    mongo.db.firs.insert_one(fir)
-    return jsonify({
-        "message": "FIR registered successfully",
-        "fir_id": int(fir["fir_id"]), 
-        "category": predicted_category
-    }), 201
+    try:
+        # Check if request contains form-data (for file uploads)
+        data = request.form if request.content_type.startswith("multipart/form-data") else request.json or {}
+        
+        description = data.get("description", "")
+        predicted_category = categorize_fir(description)
+
+        fir = {
+            "fir_id": get_next_fir_id(),
+            "complainant_name": data.get("complainant_name"),
+            "father_husband_name": data.get("father_husband_name"),
+            "address": data.get("address"),
+            "phone_number": data.get("phone_number"),
+            "email": data.get("email"),
+            "occurance_address": data.get("occurance_address"),
+            "city": data.get("city"),
+            "district": data.get("district"),
+            "state": data.get("state"),
+            "description": description,
+            "details_of_witnesses": data.get("details_of_witnesses"),
+            "aadhar_number": data.get("aadhar_number"),
+            "status": "Pending",
+            "predicted_category": predicted_category,
+            "updates": [],
+            "files": []  # Store file IDs
+        }
+
+        # Handle file uploads
+        uploaded_files = request.files.getlist("files")  # Expect multiple files
+        for file in uploaded_files:
+            if file and file.filename:  # Ensure a valid file
+                filename = secure_filename(file.filename)
+                file_id = fs.put(file, filename=filename)  # Save to GridFS
+                fir["files"].append(str(file_id))  # Store file ID as string
+
+        # Insert FIR record in MongoDB
+        mongo.db.firs.insert_one(fir)
+
+        return jsonify({
+            "message": "FIR registered successfully",
+            "fir_id": int(fir["fir_id"]),
+            "category": predicted_category,
+            "file_ids": fir["files"]  # Return uploaded file IDs
+        }), 201
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @fir_bp.route("/fir/list", methods=["GET"])
 def list_firs():
